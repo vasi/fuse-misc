@@ -1,0 +1,14 @@
+Miscellaneous small FUSE filesystems
+
+* hello: Sample filesystem, from the original FUSE distribution
+* hello_ll: Sample low-level filesystem, from FUSE 
+
+* dup_ll: Mounts an exact copy of an existing directory
+* many: FS with an enormous number of files
+
+* tree_write: Outputs the structure of a dir. tree to a file
+* tree_ll: Reads such a file, and mounts the directory
+
+TODO
+	- many should be low-level
+	- ensure cross-platform ok
