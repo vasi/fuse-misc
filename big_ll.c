@@ -39,7 +39,7 @@ static int hello_stat(fuse_ino_t ino, struct stat *stbuf)
 	return 0;
 }
 
-static void hello_ll_getattr(fuse_req_t req, fuse_ino_t ino,
+static void big_ll_getattr(fuse_req_t req, fuse_ino_t ino,
 			     struct fuse_file_info *fi)
 {
 	struct stat stbuf;
@@ -53,7 +53,7 @@ static void hello_ll_getattr(fuse_req_t req, fuse_ino_t ino,
 		fuse_reply_attr(req, &stbuf, 1.0);
 }
 
-static void hello_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
+static void big_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	struct fuse_entry_param e;
 
@@ -100,7 +100,7 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
 		return fuse_reply_buf(req, NULL, 0);
 }
 
-static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
+static void big_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 			     off_t off, struct fuse_file_info *fi)
 {
 	(void) fi;
@@ -119,7 +119,7 @@ static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 	}
 }
 
-static void hello_ll_open(fuse_req_t req, fuse_ino_t ino,
+static void big_ll_open(fuse_req_t req, fuse_ino_t ino,
 			  struct fuse_file_info *fi)
 {
 	if (ino != 2)
@@ -140,7 +140,7 @@ static char *get_block(fuse_req_t req, uint64_t i) {
 	return buf;
 }
 
-static void hello_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
+static void big_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 			  off_t off, struct fuse_file_info *fi)
 {
 	char *buf;
@@ -184,12 +184,12 @@ static void hello_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 	free(buf);
 }
 
-static struct fuse_lowlevel_ops hello_ll_oper = {
-	.lookup		= hello_ll_lookup,
-	.getattr	= hello_ll_getattr,
-	.readdir	= hello_ll_readdir,
-	.open		= hello_ll_open,
-	.read		= hello_ll_read,
+static struct fuse_lowlevel_ops big_ll_oper = {
+	.lookup		= big_ll_lookup,
+	.getattr	= big_ll_getattr,
+	.readdir	= big_ll_readdir,
+	.open		= big_ll_open,
+	.read		= big_ll_read,
 };
 
 int main(int argc, char *argv[])
@@ -230,8 +230,8 @@ int main(int argc, char *argv[])
 	    (ch = fuse_mount(mountpoint, &args)) != NULL) {
 		struct fuse_session *se;
 
-		se = fuse_lowlevel_new(&args, &hello_ll_oper,
-				       sizeof(hello_ll_oper), buf);
+		se = fuse_lowlevel_new(&args, &big_ll_oper,
+				       sizeof(big_ll_oper), buf);
 		if (se != NULL && fuse_daemonize(1) != -1) {
 			if (fuse_set_signal_handlers(se) != -1) {
 				fuse_session_add_chan(se, ch);
