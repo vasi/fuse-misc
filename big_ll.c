@@ -148,7 +148,7 @@ static char *get_block(big_ctx *ctx, uint64_t i) {
 static void big_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 			  off_t off, struct fuse_file_info *fi)
 {
-	char *buf;
+	char *buf, *pos;
 	big_ctx *ctx;
 	size_t remain;
 	
@@ -173,6 +173,7 @@ static void big_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 	}
 	
 	remain = size;
+	pos = buf;
 	while (remain) {
 		char *block;
 		
@@ -183,10 +184,11 @@ static void big_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 		size_t take = remain > avail ? avail : remain;
 		
 		block = get_block(ctx, block_idx);
-		memcpy(buf, block + start, take);
+		memcpy(pos, block + start, take);
 		
 		off += take;
 		remain -= take;
+		pos += take;
 	}
 	
 	fuse_reply_buf(req, buf, size);
