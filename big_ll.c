@@ -11,14 +11,17 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <assert.h>
+#include <stddef.h>
 
-const off_t block_size = 1024 * 128;
-const off_t total_size = 1024LL * 1024 * 1024 * 1024 * 3 / 2;
+typedef struct {
+	char *basebuf;
+	off_t block_size, total_size;
+} big_ctx;
 
 static const char *hello_str = "Hello World!\n";
 static const char *hello_name = "hello";
 
-static int hello_stat(fuse_ino_t ino, struct stat *stbuf)
+static int hello_stat(fuse_ino_t ino, struct stat *stbuf, off_t total_size)
 {
 	stbuf->st_ino = ino;
 	switch (ino) {
@@ -43,11 +46,12 @@ static void big_ll_getattr(fuse_req_t req, fuse_ino_t ino,
 			     struct fuse_file_info *fi)
 {
 	struct stat stbuf;
-
+	big_ctx *ctx = (big_ctx*)fuse_req_userdata(req);
+	
 	(void) fi;
 
 	memset(&stbuf, 0, sizeof(stbuf));
-	if (hello_stat(ino, &stbuf) == -1)
+	if (hello_stat(ino, &stbuf, ctx->total_size) == -1)
 		fuse_reply_err(req, ENOENT);
 	else
 		fuse_reply_attr(req, &stbuf, 1.0);
@@ -56,6 +60,7 @@ static void big_ll_getattr(fuse_req_t req, fuse_ino_t ino,
 static void big_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	struct fuse_entry_param e;
+	big_ctx *ctx = (big_ctx*)fuse_req_userdata(req);
 
 	if (parent != 1 || strcmp(name, hello_name) != 0)
 		fuse_reply_err(req, ENOENT);
@@ -64,7 +69,7 @@ static void big_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 		e.ino = 2;
 		e.attr_timeout = 1.0;
 		e.entry_timeout = 1.0;
-		hello_stat(e.ino, &e.attr);
+		hello_stat(e.ino, &e.attr, ctx->total_size);
 
 		fuse_reply_entry(req, &e);
 	}
@@ -131,8 +136,8 @@ static void big_ll_open(fuse_req_t req, fuse_ino_t ino,
 }
 
 // Get the data of one block
-static char *get_block(fuse_req_t req, uint64_t i) {
-	char *buf = (char*)fuse_req_userdata(req);
+static char *get_block(big_ctx *ctx, uint64_t i) {
+	char *buf = ctx->basebuf;
 	
 	// Make it different from other blocks, to defeat any dedup
 	*(uint64_t*)buf = i;
@@ -144,15 +149,18 @@ static void big_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 			  off_t off, struct fuse_file_info *fi)
 {
 	char *buf;
-	size_t remain = size;
+	big_ctx *ctx;
+	size_t remain;
 	
 	(void) fi;
 	assert(ino == 2);
 	
-	if (off > total_size)
-		off = total_size;
-	if (size > total_size - off)
-		size = total_size - off;
+	ctx = (big_ctx*)fuse_req_userdata(req);
+	
+	if (off > ctx->total_size)
+		off = ctx->total_size;
+	if (size > ctx->total_size - off)
+		size = ctx->total_size - off;
 	if (size == 0) {
 		fuse_reply_buf(req, NULL, 0);
 		return;
@@ -164,16 +172,17 @@ static void big_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 		return;
 	}
 	
+	remain = size;
 	while (remain) {
 		char *block;
 		
-		uint64_t block_idx = off / block_size;
-		off_t start = off % block_size;
+		uint64_t block_idx = off / ctx->block_size;
+		off_t start = off % ctx->block_size;
 		
-		off_t avail = block_size - start;		
+		off_t avail = ctx->block_size - start;		
 		size_t take = remain > avail ? avail : remain;
 		
-		block = get_block(req, block_idx);
+		block = get_block(ctx, block_idx);
 		memcpy(buf, block + start, take);
 		
 		off += take;
@@ -184,6 +193,37 @@ static void big_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 	free(buf);
 }
 
+static off_t parse_size(char *sizespec, char *dflt) {
+	long long ret;
+	char *endptr;
+	size_t slen;
+	
+	if (!sizespec)
+		sizespec = dflt;
+	
+	errno = 0;
+	ret = strtoll(sizespec, &endptr, 10);
+	
+	if (endptr != sizespec && errno == 0) {
+		slen = strlen(endptr);
+		if (slen == 0)
+			return ret;
+		if (slen == 1 || (slen == 2 || tolower(endptr[1]) == 'b')) {
+			char *sufs = "kmgtp";
+			char c = tolower(endptr[0]);
+			char *suf = strchr(sufs, c);
+			if (suf) {
+				for (; suf >= sufs; --suf)
+					ret *= 1024;
+				return ret;
+			}
+		}
+	}
+
+	fprintf(stderr, "Size parse error: %s\n", sizespec);
+	exit(-2);	
+}
+
 static struct fuse_lowlevel_ops big_ll_oper = {
 	.lookup		= big_ll_lookup,
 	.getattr	= big_ll_getattr,
@@ -192,35 +232,49 @@ static struct fuse_lowlevel_ops big_ll_oper = {
 	.read		= big_ll_read,
 };
 
+
+typedef struct {
+	char *base, *block_size_str, *total_size_str;
+} big_opts;
+
 int main(int argc, char *argv[])
 {
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	struct fuse_chan *ch;
-	char *buf, *mountpoint, *base;
+	char *mountpoint;
+	big_ctx ctx;
 	int err = -1;
 	
-	base = NULL;
-	struct fuse_opt opts[] = {
-		{ "--base=%s", 0, 0 },
-		FUSE_OPT_END,
+	struct fuse_opt optlist[] = {
+		{ "--content %s", offsetof(big_opts, base), 0 },
+		{ "-c %s", offsetof(big_opts, base), 0 },
+		{ "--block-size %s", offsetof(big_opts, block_size_str), 0 },
+		{ "-b %s", offsetof(big_opts, block_size_str), 0 },
+		{ "--size %s", offsetof(big_opts, total_size_str), 0 },
+		{ "-s %s", offsetof(big_opts, total_size_str), 0 },
 	};
-	if (fuse_opt_parse(&args, &base, opts, NULL) == -1) {
+	big_opts opts = { NULL, NULL, NULL };	
+	
+	if (fuse_opt_parse(&args, &opts, optlist, NULL) == -1) {
 		fprintf(stderr, "Bad opts\n");
 		exit(-2);
 	}
 	
+	ctx.block_size = parse_size(opts.block_size_str, "128K");
+	ctx.total_size = parse_size(opts.total_size_str, "1T");
+	
 	// Initialize our block data
-	if (!(buf = calloc(1, block_size))) {
+	if (!(ctx.basebuf = calloc(1, ctx.block_size))) {
 		fprintf(stderr, "Out of mem\n");
 		exit(-1);
 	}
-	if (base) { // Given a filename, 
-		int fd = open(base, O_RDONLY);
+	if (opts.base) { // Given a filename, 
+		int fd = open(opts.base, O_RDONLY);
 		if (fd == -1) {
 			fprintf(stderr, "Can't open base file\n");
 			exit(-1);
 		}
-		if (read(fd, buf, block_size) <= 0) {
+		if (read(fd, ctx.basebuf, ctx.block_size) <= 0) {
 			fprintf(stderr, "Bad read\n");
 			exit(-1);
 		}
@@ -231,7 +285,7 @@ int main(int argc, char *argv[])
 		struct fuse_session *se;
 
 		se = fuse_lowlevel_new(&args, &big_ll_oper,
-				       sizeof(big_ll_oper), buf);
+				       sizeof(big_ll_oper), &ctx);
 		if (se != NULL && fuse_daemonize(1) != -1) {
 			if (fuse_set_signal_handlers(se) != -1) {
 				fuse_session_add_chan(se, ch);
