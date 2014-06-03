@@ -33,7 +33,7 @@ static int num_parse(char *name) {
 	return ret;
 }
 
-static int child(int dnum, int fnum) {
+static int64_t child(int64_t dnum, int fnum) {
 	return branch * dnum + 1 + fnum;
 }
 
@@ -48,13 +48,13 @@ static char *split_path(char *path, size_t *n) {
 	}
 }
 
-static int inum_inner(char *path, size_t n) {
+static int64_t inum_inner(char *path, size_t n) {
 	if (!*path || strcmp(path, "/") == 0)
 		return 0;
 	
 	char *base = split_path(path, &n);
 //	fprintf(stderr, "DIR: %s\nBASE: %s\n", path, base);
-	int dnum = inum_inner(path, n);
+	uint64_t dnum = inum_inner(path, n);
 	if (dnum == -1)
 		return -1;	
 	int fnum = num_parse(base);
@@ -64,7 +64,7 @@ static int inum_inner(char *path, size_t n) {
 	return child(dnum, fnum);
 }
 
-static int inum(const char *path) {
+static int64_t inum(const char *path) {
 //	fprintf(stderr, "\nLOOKUP: %s\n", path);
 
 	static char s[PATH_MAX];
@@ -72,8 +72,8 @@ static int inum(const char *path) {
 	return inum_inner(s, strlen(s));
 }
 
-static int children(int n) {
-	int first = child(n, 0);
+static int children(int64_t n) {
+	int64_t first = child(n, 0);
 	if (first >= total)
 		return 0;
 	if (first + branch <= total)
@@ -82,7 +82,7 @@ static int children(int n) {
 }
 
 static int many_getattr(const char *path, struct stat *stbuf) {
-	int n = inum(path);
+	int64_t n = inum(path);
 	if (n == -1)
 		return -ENOENT;
 	
@@ -96,7 +96,7 @@ static int many_getattr(const char *path, struct stat *stbuf) {
 }
 
 static int many_open(const char *path, struct fuse_file_info *fi) {
-	int n = inum(path);
+	int64_t n = inum(path);
 	if (n == -1)
 		return -ENOENT;
 	if (children(n))
@@ -119,7 +119,7 @@ static int many_read(const char *path, char *buf, size_t size,
 static int many_readdir(const char *path, void *buf,
 		fuse_fill_dir_t filler, off_t offset,
 		struct fuse_file_info *fi) {
-	int n = inum(path);
+	int64_t n = inum(path);
 	if (n == -1)
 		return -ENOENT;
 	int c = children(n);
