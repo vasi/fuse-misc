@@ -147,14 +147,17 @@ static void hello_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 	size_t remain = size;
 	
 	(void) fi;
-
 	assert(ino == 2);
 	
-	//fprintf(stderr, "read: %15llx\n", off);
 	if (off > total_size)
 		off = total_size;
 	if (size > total_size - off)
 		size = total_size - off;
+	if (size == 0) {
+		fuse_reply_buf(req, NULL, 0);
+		return;
+	}
+	
 	
 	if (!(buf = malloc(size))) {
 		fuse_reply_err(req, ENOMEM);
