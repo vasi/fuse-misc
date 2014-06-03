@@ -14,7 +14,6 @@
 
 const off_t block_size = 1024 * 128;
 const off_t total_size = 1024LL * 1024 * 1024 * 1024 * 3 / 2;
-typedef uint32_t block_idx_t;
 
 static const char *hello_str = "Hello World!\n";
 static const char *hello_name = "hello";
@@ -131,30 +130,54 @@ static void hello_ll_open(fuse_req_t req, fuse_ino_t ino,
 		fuse_reply_open(req, fi);
 }
 
+// Get the data of one block
+static char *get_block(fuse_req_t req, uint64_t i) {
+	char *buf = (char*)fuse_req_userdata(req);
+	
+	// Make it different from other blocks, to defeat any dedup
+	*(uint64_t*)buf = i;
+	
+	return buf;
+}
+
 static void hello_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 			  off_t off, struct fuse_file_info *fi)
 {
+	char *buf;
+	size_t remain = size;
+	
 	(void) fi;
 
 	assert(ino == 2);
 	
-	fprintf(stderr, "read: %15llx\n", off);
+	//fprintf(stderr, "read: %15llx\n", off);
+	if (off > total_size)
+		off = total_size;
+	if (size > total_size - off)
+		size = total_size - off;
 	
-	block_idx_t h;
-	size_t hlen = sizeof(h);
-	off_t start = off - (hlen - 1);
-	off_t end = off + size;
-	off_t bend = end + hlen - 1;
-	
-	char *buf = calloc(1, bend - start);
-	
-	for (h = start / block_size; h <= end / block_size; ++h) {
-		off_t pos = h * block_size;
-		if (pos >= start && pos < end)
-			*(block_idx_t *)(buf + pos - start) = h;
+	if (!(buf = malloc(size))) {
+		fuse_reply_err(req, ENOMEM);
+		return;
 	}
 	
-	fuse_reply_buf(req, buf + off - start, size);
+	while (remain) {
+		char *block;
+		
+		uint64_t block_idx = off / block_size;
+		off_t start = off % block_size;
+		
+		off_t avail = block_size - start;		
+		size_t take = remain > avail ? avail : remain;
+		
+		block = get_block(req, block_idx);
+		memcpy(buf, block + start, take);
+		
+		off += take;
+		remain -= take;
+	}
+	
+	fuse_reply_buf(req, buf, size);
 	free(buf);
 }
 
@@ -170,15 +193,42 @@ int main(int argc, char *argv[])
 {
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	struct fuse_chan *ch;
-	char *mountpoint;
+	char *buf, *mountpoint, *base;
 	int err = -1;
-
+	
+	base = NULL;
+	struct fuse_opt opts[] = {
+		{ "--base=%s", 0, 0 },
+		FUSE_OPT_END,
+	};
+	if (fuse_opt_parse(&args, &base, opts, NULL) == -1) {
+		fprintf(stderr, "Bad opts\n");
+		exit(-2);
+	}
+	
+	// Initialize our block data
+	if (!(buf = calloc(1, block_size))) {
+		fprintf(stderr, "Out of mem\n");
+		exit(-1);
+	}
+	if (base) { // Given a filename, 
+		int fd = open(base, O_RDONLY);
+		if (fd == -1) {
+			fprintf(stderr, "Can't open base file\n");
+			exit(-1);
+		}
+		if (read(fd, buf, block_size) <= 0) {
+			fprintf(stderr, "Bad read\n");
+			exit(-1);
+		}
+	}	
+	
 	if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
 	    (ch = fuse_mount(mountpoint, &args)) != NULL) {
 		struct fuse_session *se;
 
 		se = fuse_lowlevel_new(&args, &hello_ll_oper,
-				       sizeof(hello_ll_oper), NULL);
+				       sizeof(hello_ll_oper), buf);
 		if (se != NULL && fuse_daemonize(1) != -1) {
 			if (fuse_set_signal_handlers(se) != -1) {
 				fuse_session_add_chan(se, ch);
